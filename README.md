@@ -25,7 +25,8 @@ Compatible with: GitHub Copilot, Claude Code, Codex CLI, Gemini CLI, Cursor, Win
 | Project Management | 1 | Requirements to Scrum Board |
 | Utilities | 1 | GraphAPI Send Mail |
 | UI Compliance | 1 | GDS UI Compliance |
-| **Total** | **18** | |
+| UI Prototyping | 1 | GDS Prototype Builder |
+| **Total** | **19** | |
 
 ## Available Agents
 
@@ -274,6 +275,43 @@ Enforces GOV.UK Design System (GDS) and GOV.UK Service Standard on all user-faci
 - Accessibility validation reports
 - Component usage checklist
 - Content style validation
+
+---
+
+### GDS Prototype Builder Agent
+
+**Entry point**: `.github/agents/gds-prototype-builder.agent.md`
+**Agent guide**: [`.github/docs/gds-prototype-builder-agent-guide.md`](.github/docs/gds-prototype-builder-agent-guide.md)
+**Central registry**: [`.github/docs/gds-prototype-builder-registry.md`](.github/docs/gds-prototype-builder-registry.md)
+
+Scaffolds a clickable, functional GOV.UK Design System prototype from scratch — either the official Node.js + Nunjucks GOV.UK Prototype Kit, or a pure HTML/CSS/vanilla-JS build with no templating engine, server-side logic, or database, for cases where only plain HTML syntax is usable. Can optionally analyse an existing legacy application's UI layer (any tech stack) to inventory every page and journey and carry them across into GDS components without losing the original journey's intent, or build from developer prompts on a greenfield basis.
+
+> **When to use `gds-prototype-builder` vs `gds-ui`**: Use this agent to build a **new, throwaway clickable prototype** — for user research, stakeholder walkthroughs, or deciding what a legacy app's UI should become. Use [`gds-ui`](#gds-ui-compliance-agent) to review or fix GDS compliance on **real, existing application code**.
+
+**Flavours**:
+
+| Flavour | What it is | Runtime dependency |
+|---|---|---|
+| `nodejs-nunjucks` | The official GOV.UK Prototype Kit | Node.js, `npm run dev` |
+| `html` | Pure HTML/CSS/vanilla-JS, no templating engine — assembled from shared plain-HTML partials so layout isn't hand-duplicated per page | None — open the file or serve the folder |
+
+**Skills** (under `.github/skills/gds-prototype-builder/`):
+
+| Skill | Purpose |
+|-------|---------|
+| `intake-and-setup` | Ask output path, project name, flavour, and source (legacy reference or developer prompts) |
+| `legacy-ui-discovery` | *(Conditional)* Inventory every legacy page, element, and journey, any tech stack |
+| `prototype-plan` | Produce a phased page-by-page GDS component mapping plan |
+| `prototype-scaffold-and-build` | Scaffold the chosen flavour and build every page/journey from the plan |
+| `prototype-tracking-log` | Write the per-project log and update the central registry (always runs last) |
+
+**Key outputs**:
+
+- The prototype project itself, at the developer's chosen `outputPath` (never committed to this repo)
+- `legacy-ui-inventory.json` and `legacy-ui-migration-plan.json` — legacy runs only
+- `prototype-build-plan.json` — the page/journey plan actually built
+- `PROTOTYPE-LOG.md` — per-project record of pages built, decisions, and open items
+- A row appended to the central registry for every prototype ever generated
 
 ---
 
