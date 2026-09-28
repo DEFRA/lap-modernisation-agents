@@ -23,12 +23,20 @@ Compatible with: GitHub Copilot, Claude Code, Codex CLI, Gemini CLI, Cursor, Win
 | Testing & Quality | 3 | .NET Test Automation, Playwright Tester, E2E Baseline Orchestrator *(routes internally to 6 sub-agents)* |
 | Security | 1 | Security Code Analysis |
 | Project Management | 1 | Requirements to Scrum Board |
+| Delivery Orchestration | 1 | Migration Delivery Agent *(routes internally to Requirements, Legacy Analyst, Target Architect, Build Engineer, Quality Gate, Release Packager, QA Authoring, Reporting sub-agents)* |
 | Utilities | 1 | GraphAPI Send Mail |
 | UI Compliance | 1 | GDS UI Compliance |
-| UI Prototyping | 1 | GDS Prototype Builder |
 | **Total** | **19** | |
 
 ## Available Agents
+
+### Migration Delivery Agent
+
+**Entry point**: `.github/agents/migration-delivery.agent.md` · **Guide**: [`.github/docs/migration-delivery-agent-guide.md`](.github/docs/migration-delivery-agent-guide.md) · **Build status / named gaps**: [`.github/docs/mda/build-checklist.md`](.github/docs/mda/build-checklist.md)
+
+Takes one migration user story from requirements through discovery, architecture, build, quality gates, PR packaging and QA hand-off with a human approval gate at every stage, tracking effort, tokens and complexity to Azure DevOps (Wiki + dashboard data). Commands live in `.github/prompts/` (`/requirements`, `/discover`, `/plan`, `/build`, `/quality-check`, `/package-pr`, `/fix-review`, `/fix-sonar`, `/qa-author`, `/generate-report`); hooks in `.github/hooks/`; core in `.github/lib/mda/`. Reuses existing agents wherever they cover a responsibility ([reuse check](.github/docs/mda/reuse-check.md)).
+
+---
 
 ### Database Migration Agent
 

@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "python3 .github/hooks/scripts/mda_hook.py sessionStart",
+        "powershell": "python .github/hooks/scripts/mda_hook.py sessionStart",
+        "cwd": ".",
+        "timeoutSec": 15
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "python3 .github/hooks/scripts/mda_hook.py sessionEnd",
+        "powershell": "python .github/hooks/scripts/mda_hook.py sessionEnd",
+        "cwd": ".",
+        "timeoutSec": 30
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "python3 .github/hooks/scripts/mda_hook.py userPromptSubmitted",
+        "powershell": "python .github/hooks/scripts/mda_hook.py userPromptSubmitted",
+        "cwd": ".",
+        "timeoutSec": 30
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "python3 .github/hooks/scripts/mda_hook.py agentStop",
+        "powershell": "python .github/hooks/scripts/mda_hook.py agentStop",
+        "cwd": ".",
+        "timeoutSec": 30
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "python3 .github/hooks/scripts/mda_hook.py subagentStart",
+        "powershell": "python .github/hooks/scripts/mda_hook.py subagentStart",
+        "cwd": ".",
+        "timeoutSec": 15
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "bash": "python3 .github/hooks/scripts/mda_hook.py subagentStop",
+        "powershell": "python .github/hooks/scripts/mda_hook.py subagentStop",
+        "cwd": ".",
+        "timeoutSec": 15
+      }
+    ],
+    "permissionRequest": [
+      {
+        "type": "command",
+        "bash": "python3 .github/hooks/scripts/mda_hook.py permissionRequest",
+        "powershell": "python .github/hooks/scripts/mda_hook.py permissionRequest",
+        "cwd": ".",
+        "timeoutSec": 15
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "python3 .github/hooks/scripts/mda_hook.py preToolUse",
+        "powershell": "python .github/hooks/scripts/mda_hook.py preToolUse",
+        "cwd": ".",
+        "timeoutSec": 15
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "python3 .github/hooks/scripts/mda_hook.py postToolUseFailure",
+        "powershell": "python .github/hooks/scripts/mda_hook.py postToolUseFailure",
+        "cwd": ".",
+        "timeoutSec": 15
+      }
+    ],
+    "errorOccurred": [
+      {
+        "type": "command",
+        "bash": "python3 .github/hooks/scripts/mda_hook.py errorOccurred",
+        "powershell": "python .github/hooks/scripts/mda_hook.py errorOccurred",
+        "cwd": ".",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}

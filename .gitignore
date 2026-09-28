@@ -3,3 +3,6 @@
 ################################################################################
 
 /.vs
+
+# Migration Delivery Agent local cache (per-developer; ADO is the source of truth)
+/.mda/

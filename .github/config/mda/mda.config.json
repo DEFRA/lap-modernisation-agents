@@ -1,0 +1,22 @@
+{
+  "ado": {
+    "org_url": "",
+    "project": "",
+    "effort_record_type": "Task",
+    "structured_fields": true,
+    "wiki_id": "",
+    "wiki_report_path": "/Migration-Delivery/Effort-Reports"
+  },
+  "sync": {
+    "check_every_n_prompts": 10,
+    "heartbeat_seconds": 300
+  },
+  "gates": {
+    "self_heal_max_retries": 3
+  },
+  "sprints": [],
+  "sonar": {
+    "organization": "",
+    "project_key": ""
+  }
+}
