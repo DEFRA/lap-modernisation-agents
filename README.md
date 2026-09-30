@@ -10,7 +10,7 @@ Compatible with: GitHub Copilot, Claude Code, Codex CLI, Gemini CLI, Cursor, Win
 
 ## Total Agent Count by Domain
 
-> Sub-agents invoked internally by orchestrators are not counted here. Total reflects user-invocable top-level agents only.
+> Sub-agents invoked internally by orchestrators are not counted here. Total reflects user-invocable, **implemented** top-level agents only — verified against `.agent.md` files present in `.github/agents/` as of 2026-09-30.
 
 | Domain | Count | Top-Level Agents |
 |---|---|---|
@@ -25,7 +25,8 @@ Compatible with: GitHub Copilot, Claude Code, Codex CLI, Gemini CLI, Cursor, Win
 | Project Management | 1 | Requirements to Scrum Board |
 | Utilities | 1 | GraphAPI Send Mail |
 | UI Compliance | 1 | GDS UI Compliance |
-| **Total** | **18** | |
+| **Total (implemented)** | **18** | |
+| **Planned (documented, not yet implemented)** | **2** | Azure Infrastructure Agent, Repo Compliance Gatekeeper *(no `.agent.md` file exists for these yet — see their sections below)* |
 
 ## Available Agents
 
@@ -277,7 +278,9 @@ Enforces GOV.UK Design System (GDS) and GOV.UK Service Standard on all user-faci
 
 ---
 
-### Repo Compliance Gatekeeper
+### Repo Compliance Gatekeeper *(Planned — not yet implemented)*
+
+> **Status**: This agent and its supporting workflow/scripts (`.github/agents/repo-compliance-gatekeeper.agent.md`, `.github/workflows/validate-agent-documentation.yml`, `.github/scripts/validate-agent-docs.ps1`, `CONTRIBUTING.md`, `DOCUMENTATION_REQUIREMENTS.md`) do not exist in the repository yet. The description below is the intended design, kept for future implementation.
 
 **Entry point**: `.github/agents/repo-compliance-gatekeeper.agent.md`
 
@@ -397,7 +400,9 @@ Converts legacy WCF and ASMX service contracts to modern REST APIs and direct in
 
 ---
 
-### Azure Infrastructure Agent
+### Azure Infrastructure Agent *(Planned — not yet implemented)*
+
+> **Status**: This agent and its sub-agents (`.github/agents/azure-infra.agent.md`, `azure-infra-analyser.agent.md`, `azure-infra-planner.agent.md`, `azure-infra-implementer.agent.md`) do not exist in the repository yet. The description below is the intended design, kept for future implementation.
 
 **Entry point**: `.github/agents/azure-infra.agent.md`
 
@@ -443,7 +448,7 @@ Upgrades a .NET solution from any source framework version to a specified target
 - `build-output.log` — raw build tool output
 - `upgrade-path-analysis-report.json` — risk matrix, project inventory, and upgrade plan
 
-> **When to use `dotnet-framework-upgrade` vs `dotnet-upgrade`**: Use this agent for a **single solution** that includes classic .NET Framework projects (WebForms, VB.NET, `packages.config`, `web.config`, WCF/ASMX). Use [`dotnet-upgrade`](#net-upgrade-agent) for **multiple SDK-style solutions** requiring batched execution, git branching, revert-on-failure, and Azure Functions support.
+> **When to use `dotnet-framework-upgrade` vs `dotnet-upgrade`**: Use this agent for a **single solution** that includes classic .NET Framework projects (WebForms, VB.NET, `packages.config`, `web.config`, WCF/ASMX). For **multiple SDK-style solutions** requiring batched execution, git branching, revert-on-failure, and Azure Functions support, a `dotnet-upgrade` agent is planned but does not exist yet — no `.agent.md` file has been created for it.
 
 ---
 
