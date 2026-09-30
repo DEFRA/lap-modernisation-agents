@@ -120,9 +120,9 @@ Use this agent when:
 | Classic project files (`.vbproj`/`.csproj` with `packages.config`) | ✅ Yes |
 | `web.config`, `machineKey`, binding redirects, `requestValidationMode` | ✅ Yes |
 | `msbuild` + `nuget.exe` build chain required | ✅ Yes |
-| Multiple SDK-style solutions in one run | ❌ Use [`dotnet-upgrade`](dotnet-upgrade.agent.md) instead |
-| Git branching, revert-on-failure, lessons-learned | ❌ Use [`dotnet-upgrade`](dotnet-upgrade.agent.md) instead |
-| Azure Functions v4 isolated upgrade | ❌ Use [`dotnet-upgrade`](dotnet-upgrade.agent.md) instead |
+| Multiple SDK-style solutions in one run | ❌ Planned `dotnet-upgrade` agent (not yet implemented) |
+| Git branching, revert-on-failure, lessons-learned | ❌ Planned `dotnet-upgrade` agent (not yet implemented) |
+| Azure Functions v4 isolated upgrade | ❌ Planned `dotnet-upgrade` agent (not yet implemented) |
 
 ---
  
