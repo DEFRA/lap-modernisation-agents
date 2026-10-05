@@ -16,7 +16,16 @@ PREREQ = {
     "qa_authoring": ["plan"], "qa_execution": ["pr", "qa_authoring"],
 }
 STATUSES = ("not_started", "in_progress", "awaiting_approval", "approved")
-PHASE = {"qa_authoring": "qa-authoring", "qa_execution": "qa-execution"}
+PHASE = {"qa_authoring": "qa-authoring", "qa_execution": "qa-execution",
+         # manual-entry phases (no pipeline stage; logged with `mda.py manual log`)
+         "transition_to_live": "transition_to_live", "support": "support",
+         # turns that happen outside any stage/activity window; never counted as dev effort
+         "unassigned": "unassigned"}
+PHASES = ("dev", "qa-authoring", "qa-execution", "transition_to_live", "support", "unassigned")
+MANUAL_STAGES = ("transition_to_live", "support")
+# activity commands (no gate of their own) -> the stage whose effort they belong to
+ACTIVITY_STAGE = {"research": "discovery", "db-analysis": "discovery", "unit-test": "quality",
+                  "security-review": "quality", "document": "plan"}
 TRIGGERS = ("pr-review", "sonar-recheck", "qa-defect", "dev-reopen")
 # subagent (agent file name) -> stage it owns
 SUBAGENT_STAGE = {
@@ -29,6 +38,28 @@ SUBAGENT_STAGE = {
 
 def phase_of(stage: str) -> str:
     return PHASE.get(stage, "dev")
+
+
+def log_stage_event(story: dict, stage: str, event: str) -> None:
+    """Append-only stage timeline (start/resume/changes/activity_start open a window; approve/wait/
+    activity_end close it; submit keeps it open so review chat is still attributed to the stage).
+    Used to attribute OpenTelemetry token usage to the stage that was active at the time."""
+    story.setdefault("stage_events", []).append({"stage": stage, "event": event, "at": iso()})
+    story["stage_events"] = story["stage_events"][-2000:]
+
+
+def stage_at(story: dict, ts) -> str | None:
+    """Stage whose window contains `ts` (a datetime), or None."""
+    from .core import parse_ts
+    cur = None
+    for ev in sorted(story.get("stage_events", []), key=lambda e: e["at"]):
+        if parse_ts(ev["at"]) > ts:
+            break
+        if ev["event"] in ("start", "resume", "changes", "activity_start"):
+            cur = ev["stage"]
+        elif ev["event"] in ("approve", "wait", "activity_end") and cur == ev["stage"]:
+            cur = None
+    return cur
 
 
 def artifact_path(story_id, stage: str) -> Path:
@@ -44,13 +75,13 @@ def _story_file(story_id) -> Path:
 def new_story(project: str, story_id) -> dict:
     return {
         "schema": 1, "project": project, "story_id": str(story_id), "created": iso(),
-        "setup": {"is_migration": None,
+        "setup": {"is_migration": None, "application": None, "tech_stack": None,
                   "paths": {"old": None, "new": None, "hld": None, "hlsa": None, "lld": None},
                   "account": {}, "pat": {}, "auto_continue": False},
         "cycle": 1, "complete": False, "closed": False, "current_trigger": None,
         "pr": {"raised": False, "url": None, "number": None},
         "stages": {s: {"status": "not_started"} for s in STAGES if s != "setup"},
-        "cycle_history": [], "effort": [],
+        "cycle_history": [], "effort": [], "stage_events": [], "estimate": None,
         "complexity": {"counts": None, "result": None, "confirmed": False},
         "sync": {"revision": 0, "last_sync": None, "last_check": None, "dirty": True,
                  "prompt_count": 0, "row_hashes": {}},
@@ -183,6 +214,7 @@ def start_stage(story: dict, stage: str, trigger: str = None) -> dict:
     e = story["stages"][stage]
     e.update({"status": "in_progress", "started_at": e.get("started_at") or iso(),
               "trigger": trigger or story.get("current_trigger")})
+    log_stage_event(story, stage, "start")
     return {"ok": True, "stage": stage, "cycle": story["cycle"], "trigger": e["trigger"]}
 
 
@@ -196,12 +228,14 @@ def submit_stage(story: dict, stage: str, summary: str, require_artifact: bool =
                 "message": f"Write the stage artifact to {art} before submitting."}
     e.update({"status": "awaiting_approval", "submitted_at": iso(), "summary": summary,
               "artifact": str(art.relative_to(repo_root())) if art.exists() else None})
+    log_stage_event(story, stage, "submit")
     return {"ok": True, "stage": stage, "status": "awaiting_approval"}
 
 
 def approve_stage(story: dict, stage: str, note: str = "") -> dict:
     story["stages"][stage].update({"status": "approved", "approved_at": iso(),
                                    "approval_note": note})
+    log_stage_event(story, stage, "approve")
     return {"ok": True, "stage": stage, "status": "approved"}
 
 
@@ -210,6 +244,7 @@ def request_changes(story: dict, stage: str, text: str) -> dict:
     e["status"] = "in_progress"
     e["revisions"] = e.get("revisions", 0) + 1
     e.setdefault("change_requests", []).append({"at": iso(), "text": text[:2000]})
+    log_stage_event(story, stage, "changes")
     return {"ok": True, "stage": stage, "status": "in_progress", "revisions": e["revisions"]}
 
 

@@ -7,5 +7,5 @@ Run the **plan** stage for the current story using the `target-architect` sub-ag
 1. `python .github/scripts/mda.py setup status` - if `missing` is non-empty, ask for every item and hold.
 2. `python .github/scripts/mda.py stage start --stage plan` - if it exits 3, tell the developer what is blocking (setup / unapproved prerequisite) and ask; do not proceed.
 3. Delegate to `target-architect` with the story ID, cycle, trigger, `paths` and artifact path from step 2.
-   Present the complexity score at the gate for the developer to confirm or adjust.
+   Present the complexity score **and the traditional-effort estimate per phase** (LLM-estimated, with its not-confirmed label) at the gate for the developer to confirm or adjust (`estimate set`, then `estimate confirm`).
 4. `python .github/scripts/mda.py gate submit --stage plan --summary "<summary>"`, then STOP and present the result. Wait for the developer to reply `approve` or `request changes: <text>`. Do not approve on their behalf.

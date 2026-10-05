@@ -46,6 +46,21 @@ def _try_recover(sess):
     return None
 
 
+def _stage(sess):
+    """Stage that effort booked right now belongs to: the gated stage, else the activity command's
+    stage (research, unit-test...), else None (-> 'unassigned', never silently dev effort)."""
+    return sess.get("active_stage") or (sess.get("activity") or {}).get("stage")
+
+
+def _import_usage(story):
+    """Pull real token counts from the Copilot OpenTelemetry file. Never raises into a hook."""
+    try:
+        from . import otel
+        otel.import_into_story(story)
+    except Exception:
+        pass
+
+
 def _heartbeat(story):
     if story and sync.heartbeat_due(story):
         sync.push(story, "heartbeat", hook=True)
@@ -62,7 +77,7 @@ def handle_session_start(payload: dict) -> dict:
     save_session(sess)
     try:
         from . import usage
-        usage.maybe_daily_sync(story)
+        usage.maybe_daily_sync(story, sid)  # background process; never blocks the session
     except Exception:
         pass
     return {"systemMessage": " ".join(msg)} if msg else {}
@@ -80,6 +95,14 @@ def handle_user_prompt(payload: dict) -> dict:
     cfg = load_config()
     story["sync"]["prompt_count"] += 1
     sess["failures"], sess["escalated"] = 0, False
+    if sess.get("prompt_start"):
+        # the previous turn never reported agentStop (interrupted / crashed): its duration is
+        # unknown, so book 0 s (never guess) and flag it; OpenTelemetry import can recover real time
+        E.add_entry(story, session_id=sid, stage=_stage(sess), kind="ai", start=sess["prompt_start"],
+                    end=sess["prompt_start"], est_tokens=sess.get("prompt_chars", 0) // 4, cfg=cfg,
+                    agent="orchestrator", slash_cmd=sess.get("slash_cmd"), note="interrupted_turn")
+        note_anomaly(story, "interrupted_turn", "previous turn never reported agentStop; 0 s booked")
+        sess["prompt_start"] = None
     verdict, text = gate.classify_prompt(prompt)
     waiting = awaiting_stage(story)
     if verdict and waiting:
@@ -107,10 +130,6 @@ def handle_user_prompt(payload: dict) -> dict:
             sync.push(story, f"gate:{waiting}:changes", hook=True)
             out["additionalContext"] = (f"Developer requested CHANGES on stage '{waiting}': {text}. "
                                         "Revise and resubmit to the same gate.")
-    else:
-        E_pending = sess.get("prompt_start")
-        if E_pending and sess.get("last_response_at") is None:
-            note_anomaly(story, "prompt_without_stop", "previous turn never reported agentStop")
     sess["prompt_start"] = iso(ts)
     sess["prompt_chars"] = len(prompt)
     m = re.match(r"^\s*/([\w-]+)", prompt)
@@ -131,12 +150,13 @@ def handle_agent_stop(payload: dict) -> dict:
     ts = parse_ts(_g(payload, "timestamp", "ts"))
     out = {}
     if story is None:
+        sess["prompt_start"] = None  # a turn before any story is bound is not effort and not "interrupted"
         save_session(sess)
         return out
     cfg = load_config()
     stage = sess.get("active_stage")
     if sess.get("prompt_start"):
-        E.add_entry(story, session_id=sid, stage=stage, kind="ai", start=sess["prompt_start"], end=ts,
+        E.add_entry(story, session_id=sid, stage=_stage(sess), kind="ai", start=sess["prompt_start"], end=ts,
                     est_tokens=sess.get("prompt_chars", 0) // 4, cfg=cfg, agent="orchestrator",
                     slash_cmd=sess.get("slash_cmd"))
         sess["prompt_start"] = None
@@ -146,11 +166,14 @@ def handle_agent_stop(payload: dict) -> dict:
         used = sess["forced"].get(stage, 0)
         if used < cfg["gates"]["max_forced_continuations"]:
             sess["forced"][stage] = used + 1
+            # the agent keeps working after this block: time the continuation as its own turn
+            sess["prompt_start"], sess["prompt_chars"] = iso(ts), 0
             out = {"decision": "block", "reason": (
                 f"Stage '{stage}' is in progress but has not reached its approval gate. Finish the stage, "
                 f"write the artifact to {artifact_path(story['story_id'], stage)}, then run "
                 f"`python .github/scripts/mda.py gate submit --stage {stage} --summary \"...\"`. "
                 f"If you genuinely need input from the developer, run `mda.py stage wait-input` and ask.")}
+    _import_usage(story)
     _heartbeat(story)
     save_story_clean(story) if not story["sync"]["dirty"] else save_story(story)
     save_session(sess)
@@ -172,7 +195,7 @@ def handle_subagent_stop(payload: dict) -> dict:
     start = sess["subagents"].pop(name, None)
     out = {}
     if story is not None and start:
-        E.add_entry(story, session_id=sid, stage=SUBAGENT_STAGE.get(name, sess.get("active_stage")),
+        E.add_entry(story, session_id=sid, stage=SUBAGENT_STAGE.get(name, _stage(sess)),
                     kind="subagent", start=start, end=ts, agent=name)
         stage = SUBAGENT_STAGE.get(name)
         cfg = load_config()
@@ -231,10 +254,11 @@ def handle_session_end(payload: dict) -> dict:
     sid, sess, story = _ctx(payload)
     if story is not None:
         if sess.get("prompt_start"):
-            E.add_entry(story, session_id=sid, stage=sess.get("active_stage"), kind="ai",
+            E.add_entry(story, session_id=sid, stage=_stage(sess), kind="ai",
                         start=sess["prompt_start"], end=_g(payload, "timestamp", "ts") or iso(),
                         est_tokens=sess.get("prompt_chars", 0) // 4, note="session_end_open_turn")
             sess["prompt_start"] = None
+        _import_usage(story)
         sync.push(story, "session_end", hook=True)
         save_story_clean(story) if not story["sync"]["dirty"] else save_story(story)
     save_session(sess)

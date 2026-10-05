@@ -7,7 +7,7 @@
 | `day`, `user_login` | local date of the interval; confirmed account (spec s3.4) |
 | `user_initiated_interaction_count` | agent turns (prompt -> agentStop) that day |
 | `used_cli` / `used_agent` | always true; other `used_*` false |
-| `totals_by_cli` | `prompt_count`, `request_count`, `session_count`, `token_usage{prompt_tokens_sum (estimated), output_tokens_sum (null), avg_tokens_per_request}` |
+| `totals_by_cli` | `prompt_count`, `request_count`, `session_count`, `token_usage{prompt_tokens_sum (real OpenTelemetry input tokens when present, else a prompt-size estimate), output_tokens_sum (real, or null when unknown), avg_tokens_per_request}` |
 | `totals_by_custom_agent` | sub-agent invocations (from subagentStart/Stop) |
 | `totals_by_slash_cmd` | stage commands typed (`/plan`, `/build`, ...) |
 | `distinct_*_use_count` | agents / slash commands computed; skill / MCP / plugin = null (not observable) |
@@ -15,10 +15,10 @@
 
 ## Extensions (not in GitHub's schema)
 - `totals_by_stage[]`: `{cycle, stage, phase, trigger, interaction_count, ai_seconds, approval_seconds, manual_seconds, prompt_tokens_sum}` - follows GitHub's `totals_by_*` convention.
-- `mda{}`: `schema` (`mda-user-story-day/1`), `project`, `story_id`, `cycle_current`, `sprint`, `active_seconds` (+ by phase: dev / qa-authoring / qa-execution), `capped_intervals`, `tokens_estimated: true`, and `complexity{model_version, calibrated, tier, score, counts, weights, traditional_days}` (raw factors kept for recalibration).
+- `mda{}`: `schema` (`mda-user-story-day/1`), `project`, `story_id`, `cycle_current`, `sprint`, `active_seconds` (+ by phase: dev / qa-authoring / qa-execution), `capped_intervals`, `tokens_estimated` (false when the figures are real OpenTelemetry usage, true when they are the prompt-size estimate), and `complexity{model_version, calibrated, tier, score, counts, weights, traditional_days}` (raw factors kept for recalibration).
 
 ## Rules
 - Null means "not measured", never a fake zero.
-- Token figures are estimates (prompt chars / 4); do not compare them to GitHub's measured `token_usage` without that caveat.
+- Check `mda.tokens_estimated`: when true the figures are prompt-size estimates (prompt chars / 4) and must not be compared with GitHub's measured `token_usage`; when false they are real per-call counts from Copilot's OpenTelemetry export.
 - QA manual execution appears only under `phase: qa-execution` (no AI-efficiency claim).
 - Uncalibrated complexity is flagged in `mda.complexity.calibrated`; keep it out of client-facing views until true.

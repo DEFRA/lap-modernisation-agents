@@ -22,6 +22,10 @@ class AdoError(Exception):
         self.message = message
 
 
+def _unwrap_description(desc: str) -> str:
+    return (desc or "").replace("<pre>", "").replace("</pre>", "").replace("&lt;", "<").replace("&amp;", "&")
+
+
 def _default_transport(method, url, headers, body, timeout):
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
@@ -33,11 +37,28 @@ def _default_transport(method, url, headers, body, timeout):
         raise AdoError(0, f"network error: {e}")
 
 
+def project_override(cfg: dict, project) -> dict | None:
+    """The `ado.projects` entry for this ADO project name, if the team configured one."""
+    for p in cfg["ado"].get("projects") or []:
+        if (p.get("name") or "").strip().lower() == (project or "").strip().lower():
+            return p
+    return None
+
+
+def known_projects(cfg: dict) -> list:
+    return [p["name"] for p in cfg["ado"].get("projects") or [] if p.get("name")]
+
+
 class AdoClient:
     def __init__(self, cfg=None, project=None, pat=None, transport=None, timeout=None):
         self.cfg = cfg or load_config()
         self.org = self.cfg["ado"]["org_url"]
         self.project = self.cfg["ado"]["project"] or project
+        self.wiki_id = self.cfg["ado"]["wiki_id"]
+        ov = project_override(self.cfg, self.project)
+        if ov:  # two teams / two ADO projects: per-project org, wiki...
+            self.org = (ov.get("org_url") or self.org).rstrip("/")
+            self.wiki_id = ov.get("wiki_id") or self.wiki_id
         self.api = self.cfg["ado"]["api_version"]
         self.pat = pat or pat_from_env()
         self.transport = transport or _default_transport
@@ -126,6 +147,34 @@ class AdoClient:
         ids = self.wiql(q)
         return ids[0] if ids else None
 
+    def find_titles(self, prefix: str) -> list:
+        """Work item ids whose Title starts with `prefix` (WIQL `Contains` is a loose match, so
+        the exact prefix is re-checked client-side)."""
+        tag = self.cfg["ado"]["record_tag"]
+        safe = prefix.replace("'", "''")
+        ids = self.wiql(f"Select [System.Id] From WorkItems Where [System.Tags] Contains '{tag}' "
+                        f"And [System.Title] Contains '{safe}'")
+        out = []
+        for wid in ids:
+            item = self.get_item(wid)
+            if (item.get("fields", {}).get("System.Title") or "").startswith(prefix):
+                out.append(item)
+        return out
+
+    def read_payloads(self, prefix: str) -> list:
+        """Parsed JSON payloads of every record whose Title starts with `prefix`."""
+        out = []
+        for item in self.find_titles(prefix):
+            f = item.get("fields", {})
+            raw = f.get(self.cfg["ado"]["fields"]["payload"])
+            if raw is None:
+                raw = _unwrap_description(f.get("System.Description", ""))
+            try:
+                out.append(json.loads(raw))
+            except (TypeError, ValueError):
+                continue
+        return out
+
     def upsert_record(self, key: str, fields: dict, payload: str, story_ref=None, wid=None):
         """Create or update one Effort Record. Title = key (stable, queryable). Falls back to a
         payload-only record if the custom fields are not defined in the process."""
@@ -148,19 +197,58 @@ class AdoClient:
                     self.request("PATCH", self._p(f"wit/workitems/{wid}"), ops,
                                  content_type="application/json-patch+json")
                     return {"id": wid, "created": False, "structured": attempt}
-                if story_ref:
-                    ops.append({"op": "add", "path": "/relations/-", "value": {
-                        "rel": "System.LinkTypes.Hierarchy-Reverse",
-                        "url": f"{self.org}/_apis/wit/workItems/{story_ref}"}})
-                res, _ = self.request("POST", self._p("wit/workitems/$" + urllib.parse.quote(
-                    self.cfg["ado"]["effort_record_type"])), ops, content_type="application/json-patch+json")
-                return {"id": res.get("id"), "created": True, "structured": attempt}
+                create_url = self._p("wit/workitems/$" + urllib.parse.quote(self.cfg["ado"]["effort_record_type"]))
+                link = {"op": "add", "path": "/relations/-", "value": {
+                    "rel": "System.LinkTypes.Hierarchy-Reverse", "url": f"{self.org}/_apis/wit/workItems/{story_ref}"}}
+                try:
+                    res, _ = self.request("POST", create_url, ops + ([link] if story_ref else []),
+                                          content_type="application/json-patch+json")
+                    linked = bool(story_ref)
+                except AdoError as e:
+                    # a work item type outside the backlog hierarchy may refuse a Parent link: keep the
+                    # data (it is keyed by story id anyway) rather than lose the record
+                    if not (story_ref and e.status == 400 and any(
+                            t in e.message.lower() for t in ("link", "relation", "parent", "hierarchy", "tf201"))):
+                        raise
+                    res, _ = self.request("POST", create_url, ops, content_type="application/json-patch+json")
+                    linked = False
+                return {"id": res.get("id"), "created": True, "structured": attempt, "linked": linked}
             except AdoError as e:
                 if attempt and e.status == 400 and ("TF51535" in e.message or "does not exist" in e.message
-                                                    or "field" in e.message.lower()):
+                                                    or "Cannot find field" in e.message):
                     continue  # custom fields not present yet -> retry payload-only
                 raise
         raise AdoError(400, "could not write record")
+
+    def delete_item(self, wid: int) -> None:
+        self.request("DELETE", self._p(f"wit/workitems/{wid}"))
+
+    def selftest(self) -> dict:
+        """Create a real test record with every structured field, read it back, delete it. Tells you
+        whether the work item type and custom fields are set up, without touching a real story."""
+        import datetime as dt
+        key = f"MDA-selftest-{int(dt.datetime.now().timestamp())}"
+        fields = {"record_type": "selftest", "project": self.project, "story_id": 0, "developer": "selftest",
+                  "work_date": dt.date.today().isoformat(), "stage": "selftest", "phase": "dev",
+                  "ai_hours": 0.0, "effort_hours": 0.0, "tokens_in": 0, "tokens_out": 0, "tokens_est": 0,
+                  "token_source": "none", "recorded_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+        res = {"type": self.cfg["ado"]["effort_record_type"], "project": self.project}
+        try:
+            made = self.upsert_record(key, fields, json.dumps(fields))
+            res.update({"created": True, "structured_fields": made["structured"], "work_item_id": made["id"]})
+            back = self.read_payload(key)
+            res["payload_roundtrip"] = back == fields
+            self.delete_item(made["id"])
+            res["cleaned_up"] = True
+        except AdoError as e:
+            res.update({"ok": False, "error": str(e)})
+            return res
+        res["ok"] = bool(res["payload_roundtrip"])
+        res["advice"] = (
+            "Work item type and every custom field accepted." if res["structured_fields"] else
+            "Records work, but custom fields were rejected, so the data is stored as JSON in the Description "
+            "(the Excel pipeline still works). Create the fields in .github/docs/mda/ado-setup.md for queryable columns.")
+        return res
 
     def read_payload(self, key: str):
         wid = self.find_record(key)
@@ -171,7 +259,7 @@ class AdoClient:
         raw = f.get(self.cfg["ado"]["fields"]["payload"])
         if raw is None:
             desc = f.get("System.Description", "")
-            raw = desc.replace("<pre>", "").replace("</pre>", "").replace("&lt;", "<").replace("&amp;", "&")
+            raw = _unwrap_description(desc)
         try:
             return json.loads(raw)
         except (TypeError, ValueError):
@@ -189,7 +277,7 @@ class AdoClient:
     # ---------------------------------------------------------------- wiki
     def wiki_append(self, page_path: str, markdown: str, wiki_id=None) -> dict:
         """Append (never replace) so history accumulates (spec s13)."""
-        wiki = wiki_id or self.cfg["ado"]["wiki_id"]
+        wiki = wiki_id or self.wiki_id
         if not wiki:
             wikis, _ = self.request("GET", self._p("wiki/wikis"))
             if not wikis.get("value"):

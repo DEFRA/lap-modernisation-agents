@@ -1,0 +1,32 @@
+{
+  "model_version": "1.0-llm-estimate",
+  "note": "Phase mapping for the AI Efficiency report. Traditional effort comes from each story's LLM-estimated, developer-confirmed estimate; cost columns are intentionally unused.",
+  "phases": [
+    "discovery",
+    "design",
+    "build",
+    "test",
+    "transition_to_live",
+    "support"
+  ],
+  "phase_labels": {
+    "discovery": "Discovery",
+    "design": "Design",
+    "build": "Build",
+    "test": "Test",
+    "transition_to_live": "Transition to Live",
+    "support": "Support"
+  },
+  "stage_to_phase": {
+    "requirements": "discovery",
+    "discovery": "discovery",
+    "plan": "design",
+    "build": "build",
+    "pr": "build",
+    "quality": "test",
+    "qa_authoring": "test",
+    "qa_execution": "test",
+    "transition_to_live": "transition_to_live",
+    "support": "support"
+  }
+}

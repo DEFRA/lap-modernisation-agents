@@ -13,22 +13,29 @@ DEFAULT_CONFIG = {
     "ado": {
         "org_url": "",  # e.g. https://dev.azure.com/<org>  (env MDA_ADO_ORG_URL overrides)
         "project": "",  # falls back to the story's captured project name
+        # Teams on separate ADO projects: [{"name": "ProjA", "org_url": "", "team": "", "wiki_id": "",
+        # "area_path": ""}]. When non-empty, `setup set --project` must name one of these, and a
+        # story's records go to that project. Empty = any project name is accepted.
+        "projects": [],
         "api_version": "7.1",
-        "effort_record_type": "Task",
+        "effort_record_type": "Task",  # recommended: a custom type "MDA Effort Record" (see ado-setup.md)
         "record_tag": "MDA-EffortRecord",
         "structured_fields": True,  # falls back to payload-only if fields are missing
         "wiki_id": "",
         "wiki_report_path": "/Migration-Delivery/Effort-Reports",
         "fields": {
-            "key": "Custom.MDARecordKey", "project": "Custom.MDAProject",
-            "story_id": "Custom.MDAStoryId", "sprint": "Custom.MDASprint",
-            "cycle": "Custom.MDACycle", "stage": "Custom.MDAStage",
+            # Only `payload` is required for the pipeline; the rest make records queryable.
+            "key": "Custom.MDARecordKey", "record_type": "Custom.MDARecordType",
+            "project": "Custom.MDAProject", "story_id": "Custom.MDAStoryId",
+            "developer": "Custom.MDADeveloper", "work_date": "Custom.MDAWorkDate",
+            "sprint": "Custom.MDASprint", "cycle": "Custom.MDACycle", "stage": "Custom.MDAStage",
             "phase": "Custom.MDAPhase", "trigger": "Custom.MDATrigger",
-            "factors": "Custom.MDAFactors", "weights": "Custom.MDAWeights",
-            "tier": "Custom.MDATier", "traditional_days": "Custom.MDATraditionalDays",
-            "effort_hours": "Custom.MDAActiveEffortHours",
-            "calendar_hours": "Custom.MDACalendarHours", "developer": "Custom.MDADeveloper",
-            "tokens": "Custom.MDATokens", "recorded_at": "Custom.MDARecordedAt",
+            "ai_hours": "Custom.MDAAiHours", "approval_hours": "Custom.MDAApprovalHours",
+            "manual_hours": "Custom.MDAManualHours", "effort_hours": "Custom.MDAActiveEffortHours",
+            "tokens_in": "Custom.MDATokensIn", "tokens_out": "Custom.MDATokensOut",
+            "tokens_est": "Custom.MDATokensEst", "token_source": "Custom.MDATokenSource",
+            "tier": "Custom.MDATier", "traditional_pd": "Custom.MDATraditionalPD",
+            "recorded_at": "Custom.MDARecordedAt",
             "payload": "Custom.MDAPayload",
         },
     },
@@ -40,10 +47,16 @@ DEFAULT_CONFIG = {
     },
     "pat": {"warn_days": 7},
     "effort": {
-        "approval_gap_cap_minutes": 120,  # cap on (approval - last response); flagged when hit
-        "turn_cap_minutes": 120,          # cap on a single agent turn; flagged when hit
+        "approval_gap_cap_minutes": 120,  # approval gaps longer than this are idle: EXCLUDED, flagged
+        "turn_cap_minutes": 120,          # an agent turn longer than this is capped; flagged
         "hours_per_day": 7.5,
         "timezone": "",                   # IANA name; empty = machine local time
+    },
+    "otel": {
+        # Copilot OpenTelemetry file export (VS Code Chat and CLI). See docs/mda/otel-setup.md.
+        "file": ".mda/otel/copilot.jsonl",
+        "import_turn_time": False,        # True: also take AI turn time from invoke_agent spans
+        "service_names": [],              # empty = accept every service
     },
     "gates": {
         "self_heal_max_retries": 3,       # OPEN GOVERNANCE ITEM (spec s15): not yet fixed

@@ -62,17 +62,20 @@ def sync(login: str, fetch=_gh_api, client=None) -> dict:
     if c.configured:
         try:
             key = f"MDA-usage-{login}-{snap['date']}"
-            c.upsert_record(key, {"project": "(developer-usage)", "stage": "usage", "phase": "dev",
-                                  "developer": login, "tokens": int(snap["premium_requests_gross_mtd"]),
-                                  "recorded_at": iso()}, json.dumps(snap))
+            # premium requests are a billing unit, NOT tokens: payload only, never a token field
+            c.upsert_record(key, {"record_type": "usage", "project": "(developer-usage)", "stage": "usage",
+                                  "phase": "dev", "developer": login, "recorded_at": iso()},
+                            json.dumps(snap))
             pushed = True
         except AdoError as e:
             snap["push_error"] = str(e)
     return {"snapshot": snap, "pushed_to_ado": pushed}
 
 
-def maybe_daily_sync(story) -> None:
-    """Opportunistic 'daily' cadence: runs at session start when the last snapshot is old."""
+def maybe_daily_sync(story, session_id=None) -> None:
+    """Opportunistic 'daily' cadence: at session start, when the last snapshot is old, run the sync
+    in a detached background process (gh + ADO calls can take far longer than the sessionStart
+    hook's timeout, so it must never run inline)."""
     if not story:
         return
     login = story["setup"].get("account", {}).get("confirmed_login")
@@ -84,4 +87,10 @@ def maybe_daily_sync(story) -> None:
         last = parse_ts(log["snapshots"][-1]["taken_at"])
         if (utcnow() - last).total_seconds() < hrs * 3600:
             return
-    sync(login)
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(__file__).resolve().parents[2] / "scripts" / "mda.py"
+    args = [sys.executable, str(script)] + (["--session-id", str(session_id)] if session_id else []) + ["usage"]
+    subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                     close_fds=True)

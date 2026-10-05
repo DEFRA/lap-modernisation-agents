@@ -1,0 +1,59 @@
+# Migration Delivery Agent - AI Productivity (AI Efficiency) Excel report.
+# Manual trigger. Create ONE pipeline from this file in EACH ADO project (each team reads its own
+# project's records). Optional date range: leave both blank for all data.
+# Identity (Project Build Service) needs: Work items read; Wiki EDIT only if appendWiki = true.
+trigger: none
+pr: none
+
+parameters:
+  - name: fromDate
+    displayName: From date (YYYY-MM-DD, inclusive; blank = from the start)
+    type: string
+    default: ''
+  - name: toDate
+    displayName: To date (YYYY-MM-DD, inclusive; blank = up to latest)
+    type: string
+    default: ''
+  - name: storyIds
+    displayName: Only these story IDs (comma separated; blank = all)
+    type: string
+    default: ''
+  - name: application
+    displayName: Application name for the header (blank = from the stories)
+    type: string
+    default: ''
+  - name: techStack
+    displayName: Technology stack for the header (blank = from the stories)
+    type: string
+    default: ''
+  - name: appendWiki
+    displayName: Also append a summary to the ADO Wiki
+    type: boolean
+    default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.12'
+  - script: python -m pip install openpyxl
+    displayName: Install openpyxl
+  - script: python .github/scripts/pipeline/export_ai_efficiency.py
+    displayName: Build the AI Efficiency report (xlsx)
+    env:
+      MDA_ADO_ORG_URL: $(System.CollectionUri)
+      MDA_ADO_PROJECT: $(System.TeamProject)
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      FROM_DATE: ${{ parameters.fromDate }}
+      TO_DATE: ${{ parameters.toDate }}
+      STORY_IDS: ${{ parameters.storyIds }}
+      APPLICATION: ${{ parameters.application }}
+      TECH_STACK: ${{ parameters.techStack }}
+      APPEND_WIKI: ${{ parameters.appendWiki }}
+      BUILD_ID: $(Build.BuildId)
+      OUT_DIR: $(Build.ArtifactStagingDirectory)
+  - publish: $(Build.ArtifactStagingDirectory)
+    artifact: ai-efficiency-report
+    displayName: Publish the Excel report

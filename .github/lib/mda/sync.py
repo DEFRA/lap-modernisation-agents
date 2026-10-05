@@ -1,48 +1,102 @@
 """Local cache <-> ADO sync (spec s3.2). ADO is the source of truth; the local file is a cache.
 
-Triggers: every approval-gate event, an opportunistic heartbeat on any hook event, and a
-light drift check every Nth prompt. Sync failures never raise into a hook: the story is left
-`dirty` and retried on the next trigger.
+Records written per story (all tagged `record_tag`, all in the story's own ADO project):
+  * effort rows   MDA-<story>-<developer>-<date>-c<cycle>-<stage>   one per developer/day/stage,
+                  so a date range is answered exactly and two developers never share a record
+  * estimate      MDA-<story>-estimate                              traditional-effort estimate +
+                  complexity + application header data (written once the plan is scored)
+  * state         MDA-<story>-state-<developer>                     recovery snapshot, one per
+                  developer; recovery/check MERGE all of them by effort-entry id (never last-writer-wins)
+
+Triggers: every approval-gate event, an opportunistic heartbeat on any hook event, and a light drift
+check every Nth prompt. Sync failures never raise into a hook: the story is left `dirty` and retried.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from . import effort as E
 from .ado import AdoClient, AdoError
 from .core import iso, load_config, parse_ts, utcnow
 from .state import list_local_stories, load_story, note_anomaly, save_story
 
+# story-level (not per-developer) state: adopted from the remote copy when that one is newer
+SHARED_KEYS = ("stages", "cycle", "cycle_history", "complete", "closed", "completed_at",
+               "current_trigger", "pr", "complexity", "reopen_log", "estimate")
 
-def state_key(story_id) -> str:
-    return f"MDA-{story_id}-state"
+
+def _dev(story) -> str:
+    login = (story.get("setup", {}).get("account") or {}).get("confirmed_login")
+    return re.sub(r"[^A-Za-z0-9_.@-]", "_", login) if login else "unknown"
 
 
-def row_key(story: dict, cycle, stage, phase) -> str:
-    return f"MDA-{story['story_id']}-c{cycle}-{stage}-{phase}"
+def state_key(story_id, developer="unknown") -> str:
+    return f"MDA-{story_id}-state-{developer}"
+
+
+def state_prefix(story_id) -> str:
+    return f"MDA-{story_id}-state"  # also matches pre-2.0 keys (no developer suffix)
+
+
+def estimate_key(story_id) -> str:
+    return f"MDA-{story_id}-estimate"
+
+
+def row_key(story: dict, developer, day, cycle, stage) -> str:
+    dev = re.sub(r"[^A-Za-z0-9_.@-]", "_", developer) if developer else "unknown"
+    return f"MDA-{story['story_id']}-{dev}-{day}-c{cycle}-{stage}"
+
+
+def _story_int(story):
+    return int(story["story_id"]) if str(story["story_id"]).isdigit() else 0
+
+
+def _src(sources) -> str:
+    return "otel" if "otel" in sources else "estimate" if "estimate" in sources else "none"
 
 
 def build_rows(story: dict, cfg=None) -> dict:
-    """One analytics row per (cycle, stage, phase) plus the story's complexity data (s11)."""
+    """The local developer's own per-day rows (other developers' entries merged from ADO are
+    theirs to write, under their own keys)."""
     cfg = cfg or load_config()
-    cx = (story.get("complexity") or {}).get("result") or {}
-    dev = story["setup"].get("account", {}).get("confirmed_login")
+    me = (story["setup"].get("account") or {}).get("confirmed_login")
     rows = {}
-    for k, r in E.rollup(story).items():
-        rows[row_key(story, *k)] = {
-            "project": story["project"], "story_id": int(story["story_id"]) if str(story["story_id"]).isdigit() else 0,
-            "sprint": E.dominant_sprint(story, k, cfg), "cycle": r["cycle"], "stage": r["stage"],
-            "phase": r["phase"], "trigger": r.get("trigger") or "",
-            "factors": json.dumps(cx.get("counts")) if cx else None,
-            "weights": json.dumps(cx.get("weights")) if cx else None,
-            "tier": cx.get("tier"),
-            "traditional_days": (cx.get("traditional_days") or {}).get("point"),
-            "effort_hours": E.hours(r["active_seconds"]),
-            "calendar_hours": E.hours(r["calendar_seconds"]),
-            "developer": dev, "tokens": r["tokens_est"], "recorded_at": iso(),
+    for r in E.effort_rows(story, cfg, developer=me):
+        dev = r["developer"] or me
+        day = r["work_date"]
+        active = r["ai_seconds"] + r["approval_seconds"] + r["manual_seconds"]
+        rows[row_key(story, dev, day, r["cycle"], r["stage"])] = {
+            "record_type": "effort", "project": story["project"], "story_id": _story_int(story),
+            "developer": dev, "work_date": day,
+            "sprint": E.sprint_for(__import__("datetime").date.fromisoformat(day), cfg["sprints"]),
+            "cycle": r["cycle"], "stage": r["stage"], "phase": r["phase"], "trigger": r.get("trigger") or "",
+            "ai_hours": E.hours(r["ai_seconds"]), "approval_hours": E.hours(r["approval_seconds"]),
+            "manual_hours": E.hours(r["manual_seconds"]), "effort_hours": E.hours(active),
+            "tokens_in": r["tokens_in"], "tokens_out": r["tokens_out"], "tokens_est": r["tokens_est"],
+            "token_source": _src(r["token_sources"]),
+            # payload-only detail
+            "agents": r["agents"], "models": r["models"], "sessions": r["sessions"],
+            "capped": r["capped"], "idle_excluded": r["idle_excluded"],
+            "recorded_at": iso(),
         }
     return rows
+
+
+def build_estimate(story: dict):
+    """(key, fields, payload dict) for the story-level estimate record, or None if not scored yet."""
+    cx = (story.get("complexity") or {}).get("result") or {}
+    est = story.get("estimate")
+    if not cx and not est:
+        return None
+    fields = {"record_type": "estimate", "project": story["project"], "story_id": _story_int(story),
+              "developer": _dev(story), "tier": cx.get("tier"),
+              "traditional_pd": (est or {}).get("total_pd"), "recorded_at": iso()}
+    payload = {**fields, "application": story["setup"].get("application"),
+               "tech_stack": story["setup"].get("tech_stack"), "complexity": cx or None,
+               "estimate": est}
+    return estimate_key(story["story_id"]), fields, payload
 
 
 def _row_hash(fields: dict) -> str:
@@ -59,25 +113,29 @@ def push(story: dict, reason: str, client=None, hook: bool = False) -> dict:
     c = client or _client(story, cfg["sync"]["hook_http_timeout_seconds"] if hook else None)
     if not c.configured:
         return {"ok": False, "reason": "ado_not_configured", "dirty": True}
+    ref = int(story["story_id"]) if str(story["story_id"]).isdigit() else None
     try:
         rev = story["sync"]["revision"] + 1
         snap = json.loads(json.dumps(story, default=str))
         snap["sync"]["revision"] = rev
         snap.pop("_sha", None)
         rows_done = 0
-        for key, fields in build_rows(story, cfg).items():
-            h = _row_hash(fields)
+        todo = {k: (f, f) for k, f in build_rows(story, cfg).items()}  # key -> (structured fields, payload)
+        est = build_estimate(story)
+        if est:
+            todo[est[0]] = (est[1], est[2])
+        for key, (fields, payload) in todo.items():
+            h = _row_hash(payload)
             if story["sync"]["row_hashes"].get(key) == h:
                 continue
-            c.upsert_record(key, fields, json.dumps(fields), story_ref=int(story["story_id"])
-                            if str(story["story_id"]).isdigit() else None)
+            c.upsert_record(key, fields, json.dumps(payload, default=str), story_ref=ref)
             story["sync"]["row_hashes"][key] = h
             rows_done += 1
-        c.upsert_record(state_key(story["story_id"]),
-                        {"project": story["project"], "story_id": snap["story_id"], "cycle": story["cycle"],
-                         "stage": "state", "recorded_at": iso()},
-                        json.dumps(snap, default=str),
-                        story_ref=int(story["story_id"]) if str(story["story_id"]).isdigit() else None)
+        c.upsert_record(state_key(story["story_id"], _dev(story)),
+                        {"record_type": "state", "project": story["project"], "story_id": _story_int(story),
+                         "developer": _dev(story), "cycle": story["cycle"], "stage": "state",
+                         "recorded_at": iso()},
+                        json.dumps(snap, default=str), story_ref=ref)
         story["sync"].update({"revision": rev, "last_sync": iso(), "dirty": False, "last_reason": reason})
         return {"ok": True, "reason": reason, "revision": rev, "rows_written": rows_done}
     except AdoError as e:
@@ -87,57 +145,75 @@ def push(story: dict, reason: str, client=None, hook: bool = False) -> dict:
 
 
 def merge_remote(local: dict, remote: dict) -> dict:
-    """Adopt the remote record if newer; union effort entries by id so nothing local is lost."""
-    if remote["sync"]["revision"] > local["sync"]["revision"]:
-        merged = remote
-        have = {x["id"] for x in merged["effort"]}
-        merged["effort"] += [x for x in local["effort"] if x["id"] not in have]
-        merged.setdefault("anomalies", []).extend(local.get("anomalies", [])[-10:])
-        merged["setup"]["account"] = merged["setup"].get("account") or local["setup"].get("account", {})
-        return merged
+    """Union effort entries by id (nothing from either side is lost); adopt the remote's story-level
+    state (stages, cycle, complexity, estimate...) only when the remote copy is newer. The local
+    developer's own account is never replaced by someone else's."""
     have = {x["id"] for x in local["effort"]}
-    local["effort"] += [x for x in remote["effort"] if x["id"] not in have]
+    new = [x for x in remote["effort"] if x["id"] not in have]
+    local["effort"] += new
+    seen = {(a.get("at"), a.get("kind"), a.get("detail")) for a in local.get("anomalies", [])}
+    local.setdefault("anomalies", []).extend(
+        a for a in remote.get("anomalies", [])[-10:] if (a.get("at"), a.get("kind"), a.get("detail")) not in seen)
+    ev = {(e["at"], e["stage"], e["event"]): e for e in local.get("stage_events", [])}
+    ev.update({(e["at"], e["stage"], e["event"]): e for e in remote.get("stage_events", [])})
+    local["stage_events"] = sorted(ev.values(), key=lambda e: e["at"])
+    newer = (remote["sync"].get("revision", 0) > local["sync"].get("revision", 0)
+             or (remote["sync"].get("last_sync") or "") > (local["sync"].get("last_sync") or "~"))
+    if newer or new:
+        local["sync"]["dirty"] = True
+    if newer:
+        for k in SHARED_KEYS:
+            if k in remote:
+                local[k] = remote[k]
+        for k in ("application", "tech_stack"):
+            if remote["setup"].get(k) and not local["setup"].get(k):
+                local["setup"][k] = remote["setup"][k]
     return local
 
 
 def recover(story_id, client=None, project=None):
-    """Rebuild local context from the last state synced to ADO."""
+    """Rebuild local context from every developer's last-synced state snapshot, merged."""
     c = client or AdoClient(project=project)
     if not c.configured:
         return None, "ado_not_configured"
     try:
-        remote = c.read_payload(state_key(story_id))
+        remotes = c.read_payloads(state_prefix(story_id))
     except AdoError as e:
         return None, f"ado_error: {e}"
-    if not remote:
+    if not remotes:
         return None, "no_remote_state"
-    remote["sync"]["dirty"] = False
-    return remote, "recovered"
+    remotes.sort(key=lambda r: r["sync"].get("last_sync") or "")
+    base = remotes[-1]
+    for other in remotes[:-1]:
+        merge_remote(base, other)
+    base["sync"]["dirty"] = False
+    return base, "recovered"
 
 
 def check(story: dict, client=None, hook: bool = True) -> dict:
-    """Light drift check (every Nth prompt): confirm project/story still match ADO and pull updates."""
+    """Light drift check (every Nth prompt): confirm project/story still match ADO and merge in other
+    developers' work."""
     cfg = load_config()
     c = client or _client(story, cfg["sync"]["hook_http_timeout_seconds"] if hook else None)
     story["sync"]["last_check"] = iso()
     if not c.configured:
         return {"ok": False, "reason": "ado_not_configured"}
     try:
-        remote = c.read_payload(state_key(story["story_id"]))
+        remotes = c.read_payloads(state_prefix(story["story_id"]))
     except AdoError as e:
         return {"ok": False, "reason": "ado_error", "detail": str(e)}
-    if not remote:
+    if not remotes:
         return {"ok": True, "drift": False, "note": "no remote state yet"}
-    if remote.get("project") != story["project"] or str(remote.get("story_id")) != str(story["story_id"]):
-        note_anomaly(story, "drift_mismatch", f"remote={remote.get('project')}/{remote.get('story_id')}")
-        return {"ok": False, "reason": "drift_mismatch",
-                "message": "Local project/story does not match ADO. Stop and ask the developer."}
-    if remote["sync"]["revision"] > story["sync"]["revision"]:
-        merged = merge_remote(story, remote)
-        story.clear()
-        story.update(merged)
-        return {"ok": True, "drift": True, "pulled_revision": remote["sync"]["revision"]}
-    return {"ok": True, "drift": False}
+    for remote in remotes:
+        if remote.get("project") != story["project"] or str(remote.get("story_id")) != str(story["story_id"]):
+            note_anomaly(story, "drift_mismatch", f"remote={remote.get('project')}/{remote.get('story_id')}")
+            return {"ok": False, "reason": "drift_mismatch",
+                    "message": "Local project/story does not match ADO. Stop and ask the developer."}
+    before = len(story["effort"])
+    for remote in remotes:
+        merge_remote(story, remote)
+    pulled = len(story["effort"]) - before
+    return {"ok": True, "drift": bool(pulled), "pulled_entries": pulled}
 
 
 def heartbeat_due(story: dict, cfg=None) -> bool:

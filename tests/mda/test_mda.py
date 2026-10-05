@@ -129,9 +129,15 @@ class TestEffort(Base):
         self.assertEqual(tot["active_seconds_total"], 210)  # subagent not double counted
         self.assertGreater(tot["calendar_seconds"], 86000)  # calendar reported separately
 
-    def test_idle_cap_flags_long_gap(self):
+    def test_idle_approval_gap_is_excluded_not_capped(self):
         from mda import effort as E
         e = E.add_entry(self.story, session_id="a", stage="build", kind="approval", start=0, end=10 * 3600)
+        self.assertTrue(e["capped"] and e["idle_excluded"])
+        self.assertEqual(e["seconds"], 0)  # developer was away: no invented 2 hours
+
+    def test_overlong_ai_turn_is_capped(self):
+        from mda import effort as E
+        e = E.add_entry(self.story, session_id="a", stage="build", kind="ai", start=0, end=10 * 3600)
         self.assertTrue(e["capped"])
         self.assertEqual(e["seconds"], 120 * 60)
 
@@ -225,18 +231,29 @@ class FakeTransport:
         self.items, self.next = {}, 1
         self.calls = []
         self.reject_custom = False
+        self.reject_links = False
 
     def __call__(self, method, url, headers, body, timeout):
         self.calls.append((method, url))
         data = json.loads(body) if body else None
         if "wit/wiql" in url:
-            title = None
             q = data["query"]
+            titles = {i: it["fields"].get("System.Title", "") for i, it in self.items.items()}
             if "[System.Title] = '" in q:
-                title = q.split("[System.Title] = '")[1].split("'")[0]
-            ids = [i for i, it in self.items.items() if it["fields"].get("System.Title") == title]
+                want = q.split("[System.Title] = '")[1].split("'")[0]
+                ids = [i for i, t in titles.items() if t == want]
+            elif "[System.Title] Contains '" in q:
+                frag = q.split("[System.Title] Contains '")[1].split("'")[0]
+                ids = [i for i, t in titles.items() if frag in t]
+            else:
+                ids = list(titles)
             return 200, {}, json.dumps({"workItems": [{"id": i} for i in ids]}).encode()
+        if "wit/workitems/" in url and method == "DELETE":
+            self.items.pop(int(url.split("workitems/")[1].split("?")[0]), None)
+            return 200, {}, b"{}"
         if "wit/workitems" in url and method in ("POST", "PATCH"):
+            if self.reject_links and any(op["path"] == "/relations/-" for op in data):
+                return 400, {}, b"TF201036: You cannot add a Child link between work items"
             fields = {op["path"].split("/fields/")[1]: op["value"] for op in data if op["path"].startswith("/fields/")}
             if self.reject_custom and any(k.startswith("Custom.") for k in fields):
                 return 400, {}, b"TF51535: Cannot find field Custom.MDAProject"
@@ -248,6 +265,9 @@ class FakeTransport:
                 wid = int(url.split("workitems/")[1].split("?")[0])
                 self.items[wid]["fields"].update(fields)
             return 200, {}, json.dumps({"id": wid}).encode()
+        if "wit/workitems?" in url and "ids=" in url and method == "GET":
+            ids = [int(x) for x in url.split("ids=")[1].split("&")[0].replace("%2C", ",").split(",")]
+            return 200, {}, json.dumps({"value": [self.items[i] for i in ids]}).encode()
         if "wit/workitems/" in url and method == "GET":
             wid = int(url.split("workitems/")[1].split("?")[0])
             return 200, {}, json.dumps(self.items[wid]).encode()
@@ -265,26 +285,65 @@ class TestSync(Base):
         ft = FakeTransport()
         c = self.client(ft)
         s = self.story
-        E.add_entry(s, session_id="a", stage="build", kind="ai", start=0, end=600)
+        E.add_entry(s, session_id="a", stage="build", kind="ai", start=1_700_000_000, end=1_700_000_600)
+        E.add_entry(s, session_id="a", stage="build", kind="usage", start=1_700_000_000, end=1_700_000_500,
+                    agent="build-engineer", model="gpt-x", tokens_in=1000, tokens_out=200, token_source="otel")
         s["complexity"]["result"] = __import__("mda.complexity", fromlist=["x"]).score({"screen_simple": 3})
+        s["estimate"] = __import__("mda.estimate", fromlist=["x"]).set_many(
+            None, {"build": {"pd": 3, "reason": "three simple screens"}})
         r = sync.push(s, "gate", client=c)
         self.assertTrue(r["ok"], r)
-        titles = {i["fields"]["System.Title"] for i in ft.items.values()}
-        self.assertIn("MDA-1234-state", titles)
-        self.assertIn("MDA-1234-c1-build-dev", titles)
-        row = next(i for i in ft.items.values() if i["fields"]["System.Title"] == "MDA-1234-c1-build-dev")
-        f = row["fields"]
-        self.assertEqual(f["Custom.MDATier"], "Low")
-        self.assertIn("screen_simple", f["Custom.MDAFactors"])  # raw counts stored, not just tier
-        self.assertIn("Custom.MDAWeights", f)
+        titles = {i["fields"]["System.Title"]: i["fields"] for i in ft.items.values()}
+        self.assertIn("MDA-1234-state-dev1", titles)
+        self.assertIn("MDA-1234-estimate", titles)
+        row_title = next(t for t in titles if t.startswith("MDA-1234-dev1-") and t.endswith("-c1-build"))
+        f = titles[row_title]
+        self.assertEqual(f["Custom.MDADeveloper"], "dev1")
+        self.assertEqual(f["Custom.MDATokensIn"], 1000)       # real tokens, kept apart from the estimate
+        self.assertEqual(f["Custom.MDATokenSource"], "otel")
+        self.assertAlmostEqual(f["Custom.MDAAiHours"], 600 / 3600, places=3)
+        self.assertIn("Custom.MDAWorkDate", f)
+        self.assertEqual(titles["MDA-1234-estimate"]["Custom.MDATier"], "Low")
         # unchanged rows are not rewritten
         n = len(ft.calls)
         sync.push(s, "again", client=c)
         self.assertLess(len(ft.calls) - n, n)
-        # recover from ADO
         remote, why = sync.recover("1234", client=c)
         self.assertEqual(why, "recovered")
-        self.assertEqual(len(remote["effort"]), 1)
+        self.assertEqual(len(remote["effort"]), 2)
+
+    def test_two_developers_never_overwrite_each_other(self):
+        from mda import effort as E, sync
+        ft = FakeTransport()
+        c = self.client(ft)
+        a = self.story
+        b = json.loads(json.dumps(self.story))
+        b["setup"]["account"] = {"confirmed_login": "dev2"}
+        E.add_entry(a, session_id="a", stage="build", kind="ai", start=1_700_000_000, end=1_700_000_600)
+        E.add_entry(b, session_id="b", stage="build", kind="ai", start=1_700_000_000, end=1_700_001_200)
+        self.assertTrue(sync.push(a, "x", client=c)["ok"])
+        self.assertTrue(sync.push(b, "x", client=c)["ok"])
+        titles = [i["fields"]["System.Title"] for i in ft.items.values()]
+        self.assertEqual(len([t for t in titles if t.endswith("-c1-build")]), 2)      # one row each
+        self.assertEqual(len([t for t in titles if "-state-" in t]), 2)               # one snapshot each
+        merged, why = sync.recover("1234", client=c)
+        self.assertEqual(len(merged["effort"]), 2)                                    # nothing lost
+        # a's next drift check pulls b's work in, and keeps a's own identity
+        res = sync.check(a, client=c)
+        self.assertEqual(res["pulled_entries"], 1)
+        self.assertEqual(a["setup"]["account"]["confirmed_login"], "dev1")
+        self.assertEqual(len(a["effort"]), 2)
+
+    def test_project_override_for_two_teams(self):
+        from mda.ado import AdoClient, known_projects
+        from mda.core import load_config
+        cfg = load_config()
+        cfg["ado"]["org_url"] = "https://dev.azure.com/main"
+        cfg["ado"]["projects"] = [{"name": "TeamB", "org_url": "https://dev.azure.com/other/", "wiki_id": "wb"}]
+        c = AdoClient(cfg=cfg, project="teamb", pat="x")
+        self.assertEqual((c.org, c.wiki_id), ("https://dev.azure.com/other", "wb"))
+        self.assertEqual(known_projects(cfg), ["TeamB"])
+        self.assertEqual(AdoClient(cfg=cfg, project="TeamA", pat="x").org, "https://dev.azure.com/main")
 
     def test_payload_only_fallback(self):
         from mda import sync

@@ -1,8 +1,8 @@
 {
   "model_version": "0.1-starting-weights",
   "calibrated": false,
-  "calibration_note": "Starting weights/bands from the build spec s8.1-8.2. NOT calibrated. Do not show these numbers in client-facing reporting until `mda complexity calibrate` has been run against 10-15 completed stories and the result accepted (spec s8.3, s15).",
-  "baseline_efficiency": 0.40,
+  "calibration_note": "Starting weights/bands from the build spec s8.1-8.2. NOT calibrated. Do not show these numbers in client-facing reporting until `mda complexity calibrate` has been run against 10-15 completed stories and the result accepted (spec s8.3, s15). Factors stored_procedure..identity_flow were added later with PLACEHOLDER weights.",
+  "baseline_efficiency": 0.4,
   "weights": {
     "screen_simple": 1,
     "complex_form": 3,
@@ -11,7 +11,13 @@
     "internal_api_endpoint": 1.5,
     "external_integration": 3,
     "db_object": 0.5,
-    "test_scenario": 0.2
+    "test_scenario": 0.2,
+    "stored_procedure": 0.5,
+    "ssis_package": 2,
+    "wcf_asmx_service": 1.5,
+    "report_template": 1.5,
+    "background_job": 1.5,
+    "identity_flow": 2.5
   },
   "factor_labels": {
     "screen_simple": "Screen / UI page (simple)",
@@ -21,12 +27,42 @@
     "internal_api_endpoint": "Internal API endpoint",
     "external_integration": "External integration/API",
     "db_object": "Database table/object",
-    "test_scenario": "Test scenario"
+    "test_scenario": "Test scenario",
+    "stored_procedure": "Stored procedure / function",
+    "ssis_package": "SSIS package / ADF pipeline",
+    "wcf_asmx_service": "WCF / ASMX service operation",
+    "report_template": "Report / PDF template",
+    "background_job": "Background job / Windows service",
+    "identity_flow": "Identity / auth flow"
   },
   "bands": [
-    {"max_score": 10, "tier": "Low", "days_low": 1, "days_high": 2, "efficiency": 0.5},
-    {"max_score": 25, "tier": "Medium", "days_low": 3, "days_high": 5, "efficiency": 0.4},
-    {"max_score": 50, "tier": "High", "days_low": 6, "days_high": 10, "efficiency": 0.3},
-    {"max_score": null, "tier": "Very High", "days_low": 10, "days_high": null, "efficiency": 0.2}
+    {
+      "max_score": 10,
+      "tier": "Low",
+      "days_low": 1,
+      "days_high": 2,
+      "efficiency": 0.5
+    },
+    {
+      "max_score": 25,
+      "tier": "Medium",
+      "days_low": 3,
+      "days_high": 5,
+      "efficiency": 0.4
+    },
+    {
+      "max_score": 50,
+      "tier": "High",
+      "days_low": 6,
+      "days_high": 10,
+      "efficiency": 0.3
+    },
+    {
+      "max_score": null,
+      "tier": "Very High",
+      "days_low": 10,
+      "days_high": null,
+      "efficiency": 0.2
+    }
   ]
 }

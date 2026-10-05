@@ -11,7 +11,7 @@ Run via the standalone `copilot` CLI tool. `.github/hooks/mda-hooks.json` wires 
 - Edit/shell tools are denied by the hook while a stage is `awaiting_approval`.
 - A run of consecutive tool failures is counted and capped by the hook, not by the model choosing to stop.
 
-**Status: the hook wiring itself is unverified against a real Copilot CLI install** (see `build-checklist.md` item 5) — the logic is unit-tested against synthetic hook payloads only.
+**Status: the hook wiring itself is unverified against a real Copilot CLI install** (see [getting-started.md](getting-started.md), Part E) — the logic is unit-tested against synthetic hook payloads only.
 
 ## VS Code Copilot Chat, agent selected from the dropdown — instruction-enforced
 
@@ -33,6 +33,10 @@ So in this mode there is **no external enforcer**. To still work, the orchestrat
 ## How the orchestrator knows which mode it's in
 
 `mda.py session` reports `"hooked": true/false`. It starts `false` and flips to `true` the moment any real hook event has ever fired for that session — there is nothing to configure. The orchestrator checks this once per session (see `migration-delivery.agent.md`) and behaves accordingly for the rest of it.
+
+## Tokens and turn time: the same in both runtimes
+
+Real token counts do not come from hooks or from the model. They come from Copilot's OpenTelemetry export, which both VS Code Copilot Chat and the CLI support (set up and verify with [otel-setup.md](otel-setup.md)). The importer books each LLM call to the stage window that was open. In VS Code Chat, where there are no hooks, `otel.import_turn_time: true` can also take AI turn time from the root agent span, so effort no longer depends on the model remembering `turn start` / `turn end` (it never double-counts a turn that was already timed). Approval is still the `--verbatim` pattern check, because content capture is off and the OTel file contains no prompt text.
 
 ## Practical effect on the numbers
 

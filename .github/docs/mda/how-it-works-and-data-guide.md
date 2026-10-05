@@ -59,14 +59,16 @@ Day to day: **no.** You type slash commands and `approve`; the agent calls `mda.
 
 | When | What | Who |
 |---|---|---|
-| One-off per machine | Set env vars `MDA_ADO_PAT`, `MDA_ADO_PAT_EXPIRY`, `MDA_ADO_ORG_URL`, `MDA_ADO_PROJECT` (never commit them) — Windows/macOS steps: [environment-setup.md](environment-setup.md) | Each developer |
+| One-off per machine | Set env vars `MDA_ADO_PAT`, `MDA_ADO_PAT_EXPIRY`, `MDA_ADO_ORG_URL`, `MDA_ADO_PROJECT` (never commit them) — Windows/macOS steps: [getting-started.md](getting-started.md) (Part B) | Each developer |
 | One-off per ADO org/project, **optional** | Create the Effort Record custom fields ([ado-setup.md](ado-setup.md)) so ADO/Power BI can query by field, not just recover the JSON; add sprint dates to `.mda/config.local.json` | Team lead |
 | After setup (optional check) | `python .github/scripts/mda.py ado check` | Anyone |
 | Any time | `/generate-report` in chat, or `python .github/scripts/mda.py report --print` / `metrics` | Anyone |
 | Story reopens after PR | `/fix-review`, `/fix-sonar`, or tell the agent QA found a defect | Developer |
 | After manual QA testing | `/qa-log-execution` (minutes spent) | QA / developer |
 | Once you have 10–15 finished stories | `python .github/scripts/mda.py complexity calibrate --history history.csv` | Team lead |
-| When you want the Excel + Wiki entry | Manually run the `mda-effort-export` ADO pipeline | Team lead |
+| When you want the Excel (any date range, all developers) | Manually run the `mda-ai-efficiency-report` ADO pipeline in your ADO project; From/To dates optional, blank = all data ([benefits-report.md](benefits-report.md)) | Team lead |
+| Once per install | Turn on Copilot OpenTelemetry and run `mda.py otel check` so token counts are real ([otel-setup.md](otel-setup.md)) | Each developer |
+| After Transition to Live / Support work | `/log-manual` (minutes, phase) | Developer |
 
 Things the agent **cannot** do by design: approve a gate, push code, open the PR.
 
@@ -133,19 +135,21 @@ Each entry is one **bounded** interval. Effort is never "last event minus first 
 { "id": "fefda681b078", "session_id": "demo1", "cycle": 1,
   "stage": "requirements", "phase": "dev", "kind": "ai", "trigger": null,
   "start": "2026-09-21T14:13:20Z", "end": "2026-09-21T14:15:20Z",
-  "seconds": 120.0, "raw_seconds": 120.0, "capped": false,
-  "est_tokens": 4, "agent": "orchestrator", "slash_cmd": "/requirements" }
+  "seconds": 120.0, "raw_seconds": 120.0, "capped": false, "idle_excluded": false,
+  "developer": "fujale-dev", "est_tokens": 4, "tokens_in": null, "tokens_out": null,
+  "agent": "orchestrator", "slash_cmd": "/requirements" }
 ```
 
 | Field | Notes |
 |---|---|
-| `kind` | `ai` = a turn (your prompt → agent stops). `approval` = your review time (approval minus last agent response). `manual` = logged manual QA minutes. `subagent` = timing breakdown only, **not added to totals** (it's already inside the `ai` turn) |
-| `phase` | `dev`, `qa-authoring` (AI drafts scenarios), `qa-execution` (manual, no AI) – never blended |
+| `kind` | `ai` = a turn (your prompt → agent stops). `approval` = your review time (approval minus last agent response). `manual` = logged manual minutes (QA execution, Transition to Live, Support). `subagent` = timing breakdown only, **not added to totals** (it's already inside the `ai` turn). `usage` = real token counts from OpenTelemetry (one per turn, agent and model), no time |
+| `phase` | `dev`, `qa-authoring` (AI drafts scenarios), `qa-execution` (manual, no AI), `transition_to_live` and `support` (manual entry), `unassigned` (a turn outside any stage; never counted as dev) – never blended |
 | `trigger` | Why this work happened after a reopen: `pr-review`, `sonar-recheck`, `qa-defect`, `dev-reopen` |
-| `seconds` vs `raw_seconds`, `capped` | Turns or approval gaps over 120 min are truncated (you probably walked away) and flagged. Report the count of capped intervals next to any total |
-| `est_tokens` | Estimated from prompt length (chars ÷ 4). Hooks don't see model token counts |
+| `seconds` vs `raw_seconds`, `capped`, `idle_excluded` | An AI turn over 120 min is capped (it did run) and flagged. An **approval gap** over 120 min is idle - you were away - and is **excluded** (0 s, `idle_excluded`), never counted as made-up hours. Reports show the counts next to any total |
+| `est_tokens` | Prompt-size estimate only (chars ÷ 4). Not usage; never added to the real counts |
+| `tokens_in` / `tokens_out` | Real counts from Copilot's OpenTelemetry export (on `usage` entries); `null` when telemetry was off |
 
-Real result from the simulated story: AI turn 120 s + approval gap 540 s + discovery turn 200 s = **860 s active**; the 45 s sub-agent interval is not double-counted.
+Example: AI turn 120 s + approval gap 540 s + discovery turn 200 s = **860 s active**; the 45 s sub-agent interval is not double-counted, and an approval left overnight would add 0 s, not an invented 2 hours.
 
 **Stage formula:** `active effort = Σ AI turn seconds + (approval time − last agent response time)`.
 **Story total** = sum across every stage, session, day and cycle for that story ID. **Calendar duration** (first event → last event) is reported separately.
@@ -177,23 +181,16 @@ Legacy Analyst records the counts at `/discover`; the Target Architect scores at
 
 ## 6. What lands in ADO
 
-One work item per **(story, cycle, stage, phase)**, titled `MDA-4521-c1-requirements-dev`, tag `MDA-EffortRecord`, child of the story.
+Work items in the **story's own ADO project**, tagged `MDA-EffortRecord`, children of the user story (full detail and field list: [ado-setup.md](ado-setup.md)):
 
-**The full record is always pushed as JSON.** No custom fields are required for data to land safely in ADO or for crash recovery — the agent tries the structured fields below first and, if they don't exist yet in your process, automatically falls back to writing the same JSON into the standard Description field (`ado check` / a failed field write never blocks a sync). Custom fields are only needed so ADO charts, queries and Power BI/Analytics can group and sum by an individual value (tier, developer, sprint...) instead of everything sitting inside one JSON blob. Create them ([ado-setup.md](ado-setup.md)) when you're ready to build dashboards, not before. If you do:
+| Title | What it holds |
+|---|---|
+| `MDA-4521-fujale-dev-2026-10-02-c1-build` | one developer, one work date, one stage: AI / approval / manual hours, real tokens in/out, prompt-size estimate, token source |
+| `MDA-4521-estimate` | the traditional estimate (person-days per phase, each with its reason and source, who confirmed), tier, factor counts, application and technology stack |
+| `MDA-4521-state-fujale-dev` | recovery snapshot, one per developer (recovery merges them all) |
+| `MDA-usage-<login>-<date>` | developer premium-request snapshot (billing figure, not tokens) |
 
-| Field | Example | Use |
-|---|---|---|
-| `Custom.MDAProject` / `MDAStoryId` / `MDACycle` | LAP-Civica / 4521 / 1 | Grouping |
-| `MDAStage` / `MDAPhase` / `MDATrigger` | build / dev / sonar-recheck | Slice by stage, isolate QA execution, count rework by cause |
-| `MDASprint` | Sprint 12 | Sprint views (sprint with most effort in that row) |
-| `MDAActiveEffortHours` / `MDACalendarHours` | 1.6 / 30.2 | Effort vs elapsed |
-| `MDATier` / `MDATraditionalDays` | High / 8 | Baseline for efficiency |
-| `MDAFactors` / `MDAWeights` | JSON text | Recalibration |
-| `MDADeveloper` | fujale-dev | Confirmed account |
-| `MDATokens` | 1,240 | Estimated story tokens |
-| `MDAPayload` | JSON | Full row detail |
-
-Plus `MDA-4521-state` (the whole story JSON, used for recovery) and `MDA-usage-<login>-<date>` (developer's cumulative month-to-date Copilot premium requests, snapshotted at most daily).
+**The full record is always pushed as JSON.** No custom fields are required for data to land safely or for the Excel pipeline: the agent tries the structured fields first and, if they do not exist, writes the same JSON into the Description. Custom fields only let ADO charts, queries and Power BI group and sum by an individual value (developer, work date, stage, tokens) without parsing JSON. The record grain (developer x date x stage) is what makes a date-range report exact and stops two developers overwriting each other.
 
 ---
 
@@ -274,13 +271,13 @@ Tiles: effort by developer, by tier, by sprint, by stage; tokens by developer; a
 
 ### Option B: Power BI (interactive filters)
 
-Connect to Analytics OData: `https://analytics.dev.azure.com/<org>/<project>/_odata/v4.0-preview/WorkItems?$filter=contains(Tags,'MDA-EffortRecord')&$select=WorkItemId,Title,Custom_MDAProject,Custom_MDAStoryId,Custom_MDACycle,Custom_MDAStage,Custom_MDAPhase,Custom_MDATrigger,Custom_MDATier,Custom_MDATraditionalDays,Custom_MDAActiveEffortHours,Custom_MDADeveloper,Custom_MDASprint`. Check field exposure first: `mda.py ado analytics`. Example measures:
+Connect to Analytics OData: `https://analytics.dev.azure.com/<org>/<project>/_odata/v4.0-preview/WorkItems?$filter=contains(Tags,'MDA-EffortRecord')&$select=WorkItemId,Title,Custom_MDARecordType,Custom_MDAProject,Custom_MDAStoryId,Custom_MDACycle,Custom_MDAStage,Custom_MDAPhase,Custom_MDAWorkDate,Custom_MDATier,Custom_MDATraditionalPD,Custom_MDAActiveEffortHours,Custom_MDATokensIn,Custom_MDATokensOut,Custom_MDADeveloper,Custom_MDASprint`. Effort rows have `RecordType = effort`; the traditional figure lives on the story's `estimate` record. Check field exposure first: `mda.py ado analytics`. Example measures:
 
 ```
 Dev Hours   = CALCULATE(SUM(Effort[Custom_MDAActiveEffortHours]), Effort[Custom_MDAPhase] = "dev")
-Trad Hours  = SUMX(DISTINCT(Effort[Custom_MDAStoryId]), CALCULATE(MAX(Effort[Custom_MDATraditionalDays])) * 7.5)
+Trad Hours  = SUMX(FILTER(Effort, Effort[Custom_MDARecordType] = "estimate"), Effort[Custom_MDATraditionalPD]) * 7.5
 Efficiency  = 1 - DIVIDE([Dev Hours], [Trad Hours])
-Rework %    = DIVIDE(CALCULATE([Dev Hours], NOT ISBLANK(Effort[Custom_MDATrigger])), [Dev Hours])
+Tokens In   = SUM(Effort[Custom_MDATokensIn])
 ```
 
 Add a slicer each for project, developer, sprint and a date table for the range. Requires Power BI Pro and Analytics enabled.
@@ -299,13 +296,13 @@ print(by_stage.groupby("stage")[["ai_seconds", "approval_seconds"]].sum() / 3600
 
 ### Option D: the pipeline
 
-`mda-effort-export` (manual run) writes an Excel workbook (Effort Rows, Story Summary, QA Manual Execution, Developer Usage) as a build artifact and **appends** a Wiki entry with the link. The link requires ADO sign-in with project access, and the pipeline identity needs Wiki edit permission.
+`mda-ai-efficiency-report` (manual run, one per ADO project) writes the AI Productivity workbook (template sheet, Details, Effort Rows) as a build artifact for the From/To range you give (blank = all data), and can append a wiki summary. The link requires ADO sign-in with project access; the pipeline identity needs Wiki edit only if the wiki option is ticked.
 
 ---
 
 ## 10. Limits to keep in mind
 
 - Live ADO, the Wiki write, the usage endpoint and the exact Copilot hook payloads have not been exercised end to end; run a pilot story first and compare a report against your own stopwatch.
-- Token figures are estimates; developer premium-request usage is cumulative month-to-date (daily deltas approximate).
+- Token counts are real only for turns where Copilot's OpenTelemetry export was on and imported (`mda.py otel check` proves it on your install); otherwise they read UNAVAILABLE with a labelled prompt-size estimate. Developer premium-request usage is a separate, cumulative month-to-date billing figure.
 - Complexity numbers are uncalibrated. Keep them out of client-facing material until calibration is accepted.
 - Effort caps (120 min) and the self-heal retry cap (3) are placeholders awaiting a governance decision.

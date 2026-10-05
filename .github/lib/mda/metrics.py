@@ -10,8 +10,9 @@ Deliberate differences:
     trigger, sprint, active-effort seconds, complexity raw factors + weights, calibration flag).
   * `totals_by_stage` follows GitHub's `totals_by_*` array convention.
   * Fields the hooks cannot measure are null, never a fabricated 0 (LOC, output tokens, credits).
-  * Token counts are ESTIMATES (prompt characters / 4); flagged in `mda.tokens_estimated`.
-    Authoritative per-developer consumption is GitHub's own feed (`ai_credits_used` there).
+  * Token counts are REAL (Copilot OpenTelemetry usage entries) when present; otherwise they are a
+    prompt-size ESTIMATE (prompt characters / 4). `mda.tokens_estimated` says which. Per-developer
+    billing consumption is GitHub's own feed (`ai_credits_used` there).
 """
 from __future__ import annotations
 
@@ -61,7 +62,11 @@ def build_records(story: dict, cfg=None) -> list:
                 r["approval_seconds"] += x["seconds"]
             elif x["kind"] == "manual":
                 r["manual_seconds"] += x["seconds"]
-        ptok = sum(x.get("est_tokens", 0) for x in ai)
+        usage_ents = [x for x in ents if x["kind"] == "usage"]
+        tin = sum(x.get("tokens_in") or 0 for x in usage_ents)
+        tout = sum(x.get("tokens_out") or 0 for x in usage_ents)
+        real = bool(usage_ents)
+        ptok = tin if real else sum(x.get("est_tokens", 0) for x in ai)
         sp = E.sprint_for(__import__("datetime").date.fromisoformat(day), cfg["sprints"])
         sprint_of[day] = sp
         active = sum(x["seconds"] for x in E.active(ents))
@@ -85,7 +90,7 @@ def build_records(story: dict, cfg=None) -> list:
             "distinct_plugin_use_count": None,
             "totals_by_cli": {
                 "prompt_count": len(ai), "request_count": len(ai), "session_count": len(sessions),
-                "token_usage": {"prompt_tokens_sum": ptok, "output_tokens_sum": None,
+                "token_usage": {"prompt_tokens_sum": ptok, "output_tokens_sum": tout if real else None,
                                 "avg_tokens_per_request": round(ptok / len(ai), 1) if ai else None},
             },
             "totals_by_custom_agent": [{"custom_agent": k, "interaction_count": v} for k, v in sorted(agents.items())],
@@ -102,7 +107,7 @@ def build_records(story: dict, cfg=None) -> list:
                 "active_seconds_by_phase": {p: round(sum(x["seconds"] for x in E.active(ents) if x["phase"] == p), 1)
                                             for p in ("dev", "qa-authoring", "qa-execution")},
                 "capped_intervals": sum(1 for x in ents if x.get("capped")),
-                "tokens_estimated": True,
+                "tokens_estimated": not real,
                 "complexity": ({"model_version": cx.get("model_version"), "calibrated": cx.get("calibrated"),
                                 "tier": cx.get("tier"), "score": cx.get("score"),
                                 "counts": cx.get("counts"), "weights": cx.get("weights"),
